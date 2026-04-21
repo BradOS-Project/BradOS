@@ -1,0 +1,187 @@
+name: BradOS Full Distro Build Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  OS_NAME: BradOS
+  KERNEL_VERSION: 6.8.9
+  INSTALLER_REPO: https://github.com/yourname/BradOS-installer.git
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    # =========================
+    # Checkout repo
+    # =========================
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # =========================
+    # Install dependencies
+    # =========================
+    - name: Install build tools
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          build-essential \
+          bc bison flex \
+          libssl-dev libelf-dev \
+          git wget \
+          xorriso squashfs-tools \
+          mtools dosfstools \
+          rsync qemu-system-x86 \
+          python3
+
+    # =========================
+    # VERSION (FIXED SYSTEM)
+    # =========================
+    - name: Generate version
+      run: |
+        echo "VERSION=$(date +'%Y.%m.%d')-${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+    # =========================
+    # Buildroot
+    # =========================
+    - name: Clone Buildroot
+      run: |
+        git clone https://github.com/buildroot/buildroot.git
+
+    # =========================
+    # Linux kernel
+    # =========================
+    - name: Download Linux kernel
+      run: |
+        wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz
+        tar -xf linux-${KERNEL_VERSION}.tar.xz
+
+    - name: Build kernel
+      run: |
+        cd linux-${KERNEL_VERSION}
+        make defconfig
+        make -j$(nproc)
+        cp arch/x86/boot/bzImage ../bzImage
+
+    # =========================
+    # Limine bootloader
+    # =========================
+    - name: Clone Limine
+      run: |
+        git clone https://github.com/limine-bootloader/limine.git
+        cd limine
+        make
+
+    # =========================
+    # Download installer (EXTERNAL REPO)
+    # =========================
+    - name: Download installer
+      run: |
+        git clone $INSTALLER_REPO installer-src
+
+    # =========================
+    # Build root filesystem
+    # =========================
+    - name: Build Buildroot system
+      run: |
+        cd buildroot
+        make defconfig
+        make -j$(nproc)
+
+    # =========================
+    # Inject installer + OS config
+    # =========================
+    - name: Inject system files
+      run: |
+        ROOT=buildroot/output/target
+
+        mkdir -p $ROOT/usr/bin
+
+        cp installer-src/gui_installer.py $ROOT/usr/bin/
+        chmod +x $ROOT/usr/bin/gui_installer.py
+
+        echo "python3 /usr/bin/gui_installer.py" >> $ROOT/etc/profile
+
+        echo "NAME=$OS_NAME" > $ROOT/etc/os-release
+        echo "VERSION=$VERSION" >> $ROOT/etc/os-release
+        echo "$VERSION" > $ROOT/etc/BradOS-version
+
+    # =========================
+    # Create squashfs root
+    # =========================
+    - name: Build squashfs
+      run: |
+        mksquashfs buildroot/output/target rootfs.squashfs -comp xz
+
+    # =========================
+    # Prepare ISO (SAFE YAML VERSION)
+    # =========================
+    - name: Prepare ISO
+      run: |
+        mkdir -p iso/boot
+
+        cp rootfs.squashfs iso/
+        cp bzImage iso/boot/
+
+        cp limine/limine-bios-cd.bin iso/boot/
+        cp limine/limine.sys iso/boot/
+
+        # SAFE config generation (NO YAML BREAKING HEREDOC)
+        printf "TIMEOUT=5\n" > iso/boot/limine.conf
+        printf "GRAPHICS=yes\n" >> iso/boot/limine.conf
+        printf "BACKGROUND_PATH=/boot/splash.bmp\n\n" >> iso/boot/limine.conf
+
+        printf ":BradOS\n" >> iso/boot/limine.conf
+        printf "    PROTOCOL=linux\n" >> iso/boot/limine.conf
+        printf "    KERNEL_PATH=/boot/bzImage\n" >> iso/boot/limine.conf
+        printf "    CMDLINE=root=/dev/ram0 rw\n" >> iso/boot/limine.conf
+
+        cp assets/splash.bmp iso/boot/ 2>/dev/null || true
+
+    # =========================
+    # Build ISO
+    # =========================
+    - name: Build ISO
+      run: |
+        xorriso -as mkisofs \
+          -o BradOS-${VERSION}.iso \
+          -b boot/limine-bios-cd.bin \
+          -no-emul-boot \
+          -boot-load-size 4 \
+          -boot-info-table \
+          iso/
+
+    # =========================
+    # Test boot (optional)
+    # =========================
+    - name: QEMU boot test
+      run: |
+        qemu-system-x86_64 \
+          -m 1024 \
+          -cdrom BradOS-${VERSION}.iso \
+          -nographic \
+          -serial stdio \
+          -no-reboot || true
+
+    # =========================
+    # Upload ISO artifact (FIXED VERSION USAGE)
+    # =========================
+    - name: Upload ISO
+      uses: actions/upload-artifact@v4
+      with:
+        name: BradOS-iso
+        path: BradOS-${{ env.VERSION }}.iso
+
+    # =========================
+    # Create GitHub Release (FIXED)
+    # =========================
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.VERSION }}
+        name: BradOS ${{ env.VERSION }}
+        files: BradOS-${{ env.VERSION }}.iso
