@@ -12,6 +12,7 @@ env:
   OS_NAME: BradOS
   KERNEL_VERSION: 6.8.9
   INSTALLER_REPO: https://github.com/BradOS-Project/Installer.git
+  BUILDROOT_VERSION: 2024.02
 
 jobs:
   build:
@@ -24,22 +25,23 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y build-essential bc bison flex libssl-dev libelf-dev \
-          git wget xorriso squashfs-tools mtools dosfstools rsync python3
+            git wget xorriso squashfs-tools mtools dosfstools rsync python3 cpio
 
       - name: Generate Version String
         run: echo "VERSION=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
 
-      - name: Cache Buildroot
+      - name: Cache Buildroot Downloads
         uses: actions/cache@v4
         with:
-          path: |
-            buildroot/dl
-            buildroot/output
-          key: brados-v10-${{ github.ref_name }}
+          path: buildroot/dl
+          key: brados-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/.config') }}
+          restore-keys: |
+            brados-dl-${{ env.BUILDROOT_VERSION }}-
 
       - name: Fetch Sources
         run: |
-          [ -d buildroot ] || git clone --depth 1 https://github.com/buildroot/buildroot.git
+          set -e
+          [ -d buildroot ] || git clone --depth 1 --branch ${{ env.BUILDROOT_VERSION }} https://github.com/buildroot/buildroot.git
           [ -d limine ] || git clone --branch v7.x-binary --depth 1 https://github.com/limine-bootloader/limine.git
           git clone ${{ env.INSTALLER_REPO }} installer-src
           wget -q https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${{ env.KERNEL_VERSION }}.tar.xz
@@ -47,19 +49,23 @@ jobs:
 
       - name: Build Kernel
         run: |
+          set -e
           cd linux-${{ env.KERNEL_VERSION }}
           if [ ! -f arch/x86/boot/bzImage ]; then
             make x86_64_defconfig
+            scripts/config -e CONFIG_SQUASHFS -e CONFIG_SQUASHFS_XZ \
+                           -e CONFIG_OVERLAY_FS -e CONFIG_DEVTMPFS
+            make olddefconfig
             make -j$(nproc) bzImage
           fi
           cp arch/x86/boot/bzImage ../bzImage
 
-      - name: Build OS (Buildroot)
+      - name: Configure Buildroot
         run: |
+          set -e
           cd buildroot
           make qemu_x86_64_defconfig
-          
-          cat <<EOF > brados.config
+          cat <<EOF > configs/brados_defconfig
           BR2_PACKAGE_PYTHON3=y
           BR2_PACKAGE_PYTHON3_TKINTER=y
           BR2_PACKAGE_XORG7=y
@@ -72,27 +78,37 @@ jobs:
           BR2_PACKAGE_E2FSPROGS=y
           BR2_PACKAGE_UTIL_LINUX=y
           BR2_PACKAGE_UTIL_LINUX_WIPEFS=y
+          BR2_TARGET_ROOTFS_INITRAMFS=y
+          BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
+          BR2_PACKAGE_UTIL_LINUX_MOUNT=y
+          BR2_PACKAGE_E2FSPROGS_MKE2FS=y
           EOF
-
-          ./support/kconfig/merge_config.sh -m .config brados.config
-          
-          # This command removes the Legacy error blockers
-          sed -i '/BR2_LEGACY/d' .config
-          
+          make BR2_DEFCONFIG=configs/brados_defconfig defconfig
           make olddefconfig
+
+      - name: Build Buildroot RootFS and Initramfs
+        run: |
+          set -e
+          cd buildroot
           make -j$(nproc)
 
       - name: Assemble Final System
         run: |
+          set -e
           ROOT=buildroot/output/target
-          mkdir -p $ROOT/usr/bin $ROOT/root/Desktop $ROOT/usr/share/limine
-          
+          INITRAMFS=buildroot/output/images/rootfs.cpio
+          mkdir -p $ROOT/usr/bin $ROOT/root/Desktop $ROOT/usr/share/limine $ROOT/boot
+
           # Copy Installer and Tools
           cp installer-src/gui_installer.py $ROOT/usr/bin/
           chmod +x $ROOT/usr/bin/gui_installer.py
           cp limine/limine-bios.sys $ROOT/usr/share/limine/
           cp limine/limine $ROOT/usr/bin/
-          
+          chmod +x $ROOT/usr/bin/limine
+
+          # Copy kernel into rootfs so it's available for installation
+          cp ../bzImage $ROOT/boot/
+
           # Live ISO Desktop Icon
           cat <<EOF > $ROOT/root/Desktop/Install.desktop
           [Desktop Entry]
@@ -108,26 +124,38 @@ jobs:
           echo "fluxbox &" > $ROOT/root/.xinitrc
           echo "pcmanfm --desktop &" >> $ROOT/root/.xinitrc
           echo "python3 /usr/bin/gui_installer.py" >> $ROOT/root/.xinitrc
-          
           grep -q "startx" $ROOT/etc/profile || echo "startx" >> $ROOT/etc/profile
+
+          # Create SquashFS of the root filesystem
+          mksquashfs $ROOT rootfs.squashfs -comp xz -noappend
+
+          # Verify initramfs exists
+          [ -f "$INITRAMFS" ] || { echo "Initramfs not found!"; exit 1; }
 
       - name: Create Bootable ISO
         run: |
-          mksquashfs buildroot/output/target rootfs.squashfs -comp xz -noappend
+          set -e
           mkdir -p iso/boot
           cp rootfs.squashfs iso/
           cp bzImage iso/boot/
+          cp buildroot/output/images/rootfs.cpio iso/boot/initramfs.cpio
           cp limine/limine-bios.sys limine/limine-bios-cd.bin iso/boot/
+
           cat <<EOF > iso/boot/limine.conf
           TIMEOUT=3
           GRAPHICS=yes
           :BradOS (Live)
               PROTOCOL=linux
               KERNEL_PATH=/boot/bzImage
+              MODULE_PATH=/boot/initramfs.cpio
               MODULE_PATH=/rootfs.squashfs
-              CMDLINE=root=/dev/ram0 rw
+              CMDLINE=initrd=/boot/initramfs.cpio root=/dev/ram0 rw rootfstype=squashfs rootflags=loop
           EOF
-          xorriso -as mkisofs -o BradOS-${{ env.VERSION }}.iso -b boot/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table iso/
+
+          xorriso -as mkisofs -o BradOS-${{ env.VERSION }}.iso \
+            -b boot/limine-bios-cd.bin \
+            -no-emul-boot -boot-load-size 4 -boot-info-table \
+            iso/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
