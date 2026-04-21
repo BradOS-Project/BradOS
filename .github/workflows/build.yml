@@ -17,13 +17,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: System Deps
-        run: sudo apt update && sudo apt install -y build-essential bc bison flex libssl-dev libelf-dev git wget xorriso squashfs-tools mtools dosfstools rsync python3
+      - name: Install System Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential bc bison flex libssl-dev libelf-dev \
+          git wget xorriso squashfs-tools mtools dosfstools rsync python3
 
-      - name: Generate Version
+      - name: Generate Version String
         run: echo "VERSION=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
 
       - name: Cache Buildroot
@@ -32,7 +35,7 @@ jobs:
           path: |
             buildroot/dl
             buildroot/output
-          key: brados-v9-${{ github.ref_name }}
+          key: brados-v10-${{ github.ref_name }}
 
       - name: Fetch Sources
         run: |
@@ -56,7 +59,6 @@ jobs:
           cd buildroot
           make qemu_x86_64_defconfig
           
-          # Create a fragment to avoid "Legacy" and "Override" errors
           cat <<EOF > brados.config
           BR2_PACKAGE_PYTHON3=y
           BR2_PACKAGE_PYTHON3_TKINTER=y
@@ -72,22 +74,26 @@ jobs:
           BR2_PACKAGE_UTIL_LINUX_WIPEFS=y
           EOF
 
-          # Merge config and clean legacy markers
           ./support/kconfig/merge_config.sh -m .config brados.config
+          
+          # This command removes the Legacy error blockers
+          sed -i '/BR2_LEGACY/d' .config
+          
           make olddefconfig
           make -j$(nproc)
 
-      - name: Assemble Distro
+      - name: Assemble Final System
         run: |
           ROOT=buildroot/output/target
           mkdir -p $ROOT/usr/bin $ROOT/root/Desktop $ROOT/usr/share/limine
           
+          # Copy Installer and Tools
           cp installer-src/gui_installer.py $ROOT/usr/bin/
           chmod +x $ROOT/usr/bin/gui_installer.py
           cp limine/limine-bios.sys $ROOT/usr/share/limine/
           cp limine/limine $ROOT/usr/bin/
           
-          # Desktop Icon for Live Media
+          # Live ISO Desktop Icon
           cat <<EOF > $ROOT/root/Desktop/Install.desktop
           [Desktop Entry]
           Name=Install BradOS
@@ -98,14 +104,14 @@ jobs:
           EOF
           chmod +x $ROOT/root/Desktop/Install.desktop
 
-          # Live startup (Modified by installer during HDD install)
+          # Startup Configuration (Live)
           echo "fluxbox &" > $ROOT/root/.xinitrc
           echo "pcmanfm --desktop &" >> $ROOT/root/.xinitrc
           echo "python3 /usr/bin/gui_installer.py" >> $ROOT/root/.xinitrc
           
           grep -q "startx" $ROOT/etc/profile || echo "startx" >> $ROOT/etc/profile
 
-      - name: Generate ISO
+      - name: Create Bootable ISO
         run: |
           mksquashfs buildroot/output/target rootfs.squashfs -comp xz -noappend
           mkdir -p iso/boot
@@ -123,7 +129,7 @@ jobs:
           EOF
           xorriso -as mkisofs -o BradOS-${{ env.VERSION }}.iso -b boot/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table iso/
 
-      - name: Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.VERSION }}
