@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
   OS_NAME: BradOS
   KERNEL_VERSION: 6.8.9
@@ -14,62 +17,38 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # --- 1. INITIAL SETUP ---
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install build tools (Host)
+      - name: Install build tools
         run: |
           sudo apt update
-          sudo apt install -y \
-            build-essential bc bison flex libssl-dev libelf-dev \
-            git wget xorriso squashfs-tools mtools dosfstools \
-            rsync qemu-system-x86 python3
+          sudo apt install -y build-essential bc bison flex libssl-dev libelf-dev \
+            git wget xorriso squashfs-tools mtools dosfstools rsync qemu-system-x86 python3
 
       - name: Generate version
         run: echo "VERSION=$(date +'%Y.%m.%d')-${GITHUB_SHA::7}" >> $GITHUB_ENV
 
-      # --- 2. CACHING ---
-      # This saves the compiled binaries so future runs take minutes, not hours.
-      - name: Cache Buildroot and Kernel
+      - name: Cache Buildroot
         uses: actions/cache@v4
         with:
           path: |
             buildroot/dl
             buildroot/output
-            linux-${{ env.KERNEL_VERSION }}
-          key: ${{ runner.os }}-brados-v2-${{ env.KERNEL_VERSION }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-brados-v2-${{ env.KERNEL_VERSION }}-
-            ${{ runner.os }}-brados-v2-
+          key: brados-v6-${{ github.ref_name }}
+          restore-keys: brados-v6-
 
-      # --- 3. FETCH SOURCES ---
-      - name: Clone Buildroot
+      - name: Clone Sources
         run: |
-          if [ ! -d "buildroot" ]; then
-            git clone --depth 1 https://github.com/buildroot/buildroot.git
-          fi
-
-      - name: Download Linux kernel
-        run: |
+          [ -d buildroot ] || git clone --depth 1 https://github.com/buildroot/buildroot.git
+          [ -d limine ] || git clone --branch v7.x-binary --depth 1 https://github.com/limine-bootloader/limine.git
+          rm -rf installer-src && git clone ${{ env.INSTALLER_REPO }} installer-src
           if [ ! -d "linux-${{ env.KERNEL_VERSION }}" ]; then
             wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${{ env.KERNEL_VERSION }}.tar.xz
             tar -xf linux-${{ env.KERNEL_VERSION }}.tar.xz
           fi
 
-      - name: Clone Limine (Binary)
-        run: |
-          if [ ! -d "limine" ]; then
-            git clone --branch v7.x-binary --depth 1 https://github.com/limine-bootloader/limine.git
-          fi
-
-      - name: Download installer
-        run: |
-          rm -rf installer-src
-          git clone ${{ env.INSTALLER_REPO }} installer-src
-
-      # --- 4. BUILD PHASE ---
-      - name: Build kernel
+      - name: Build Kernel
         run: |
           cd linux-${{ env.KERNEL_VERSION }}
           if [ ! -f arch/x86/boot/bzImage ]; then
@@ -78,98 +57,72 @@ jobs:
           fi
           cp arch/x86/boot/bzImage ../bzImage
 
-      - name: Build Buildroot (Injecting Dependencies)
+      - name: Build Buildroot
         run: |
           cd buildroot
-          
-          # Initialize config if it doesn't exist
-          if [ ! -f .config ]; then
-            make qemu_x86_64_defconfig
-          fi
-          
-          # FORCE DEPENDENCIES (Tkinter, X11, Disk Tools)
+          [ -f .config ] || make qemu_x86_64_defconfig
           {
             echo "BR2_PACKAGE_PYTHON3=y"
             echo "BR2_PACKAGE_PYTHON3_TKINTER=y"
-            echo "BR2_PACKAGE_PYTHON3_PY_ONLY=y"
             echo "BR2_PACKAGE_XORG7=y"
             echo "BR2_PACKAGE_XSERVER_XORG_SERVER=y"
-            echo "BR2_PACKAGE_XSERVER_XORG_SERVER_MODULAR=y"
             echo "BR2_PACKAGE_FLUXBOX=y"
+            echo "BR2_PACKAGE_PCMANFM=y"
+            echo "BR2_PACKAGE_MIDORI=y" 
+            echo "BR2_PACKAGE_RSYNC=y"
+            echo "BR2_PACKAGE_PARTED=y"
             echo "BR2_PACKAGE_E2FSPROGS=y"
-            echo "BR2_PACKAGE_FDISK=y"
-            echo "BR2_PACKAGE_XTERM=y"
+            echo "BR2_PACKAGE_UTIL_LINUX=y"
+            echo "BR2_PACKAGE_UTIL_LINUX_WIPEFS=y"
           } >> .config
-
-          # Clean up and build
           make olddefconfig
           make -j$(nproc)
 
-      # --- 5. SYSTEM ASSEMBLY ---
-      - name: Inject system files
+      - name: Assemble Filesystem
         run: |
           ROOT=buildroot/output/target
-          mkdir -p $ROOT/usr/bin
-          mkdir -p $ROOT/root
-
-          # 1. Copy the installer script
-          cp installer-src/*.py $ROOT/usr/bin/ 2>/dev/null || true
+          mkdir -p $ROOT/usr/bin $ROOT/root/Desktop $ROOT/usr/share/limine
+          cp installer-src/*.py $ROOT/usr/bin/
           chmod +x $ROOT/usr/bin/gui_installer.py
+          cp limine/limine-bios.sys $ROOT/usr/share/limine/
+          cp limine/limine $ROOT/usr/bin/
+          
+          cat <<EOF > $ROOT/root/Desktop/Installer.desktop
+          [Desktop Entry]
+          Type=Application
+          Name=Install BradOS
+          Exec=python3 /usr/bin/gui_installer.py
+          Icon=system-software-install
+          Terminal=false
+          EOF
+          chmod +x $ROOT/root/Desktop/Installer.desktop
 
-          # 2. Configure the GUI auto-start
-          # This creates the script that runs when you type 'startx'
           echo "fluxbox &" > $ROOT/root/.xinitrc
+          echo "pcmanfm --desktop &" >> $ROOT/root/.xinitrc
+          echo "midori &" >> $ROOT/root/.xinitrc
           echo "python3 /usr/bin/gui_installer.py" >> $ROOT/root/.xinitrc
           
-          # 3. Auto-login and start GUI
-          if ! grep -q "startx" $ROOT/etc/profile; then
-            echo "startx" >> $ROOT/etc/profile
-          fi
+          grep -q "startx" $ROOT/etc/profile || echo "startx" >> $ROOT/etc/profile
+          echo "NAME=\"BradOS\"" > $ROOT/etc/os-release
 
-          # 4. OS Metadata
-          {
-            echo "NAME=\"${{ env.OS_NAME }}\""
-            echo "VERSION=\"${{ env.VERSION }}\""
-            echo "ID=brados"
-            echo "PRETTY_NAME=\"${{ env.OS_NAME }} ${{ env.VERSION }}\""
-          } > $ROOT/etc/os-release
-
-      - name: Build squashfs
-        run: mksquashfs buildroot/output/target rootfs.squashfs -comp xz -noappend
-
-      # --- 6. CREATE ISO ---
-      - name: Prepare ISO Layout
+      - name: Create ISO
         run: |
+          mksquashfs buildroot/output/target rootfs.squashfs -comp xz -noappend
           mkdir -p iso/boot
           cp rootfs.squashfs iso/
           cp bzImage iso/boot/
           cp limine/limine-bios.sys limine/limine-bios-cd.bin iso/boot/
-
           cat <<EOF > iso/boot/limine.conf
           TIMEOUT=3
           GRAPHICS=yes
-
           :BradOS
               PROTOCOL=linux
               KERNEL_PATH=/boot/bzImage
               MODULE_PATH=/rootfs.squashfs
               CMDLINE=root=/dev/ram0 rw
           EOF
-
-      - name: Build ISO Image
-        run: |
-          xorriso -as mkisofs \
-            -o BradOS-${{ env.VERSION }}.iso \
-            -b boot/limine-bios-cd.bin \
-            -no-emul-boot -boot-load-size 4 -boot-info-table \
-            iso/
-
-      # --- 7. EXPORT ---
-      - name: Upload ISO
-        uses: actions/upload-artifact@v4
-        with:
-          name: BradOS-ISO
-          path: BradOS-${{ env.VERSION }}.iso
+          xorriso -as mkisofs -o BradOS-${{ env.VERSION }}.iso \
+            -b boot/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table iso/
 
       - name: Create Release
         if: github.ref == 'refs/heads/main'
