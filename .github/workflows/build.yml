@@ -32,7 +32,7 @@ jobs:
           path: |
             buildroot/dl
             buildroot/output
-          key: brados-v8-${{ github.ref_name }}
+          key: brados-v9-${{ github.ref_name }}
 
       - name: Fetch Sources
         run: |
@@ -45,28 +45,35 @@ jobs:
       - name: Build Kernel
         run: |
           cd linux-${{ env.KERNEL_VERSION }}
-          make x86_64_defconfig
-          make -j$(nproc) bzImage
+          if [ ! -f arch/x86/boot/bzImage ]; then
+            make x86_64_defconfig
+            make -j$(nproc) bzImage
+          fi
           cp arch/x86/boot/bzImage ../bzImage
 
       - name: Build OS (Buildroot)
         run: |
           cd buildroot
-          [ -f .config ] || make qemu_x86_64_defconfig
-          {
-            echo "BR2_PACKAGE_PYTHON3=y"
-            echo "BR2_PACKAGE_PYTHON3_TKINTER=y"
-            echo "BR2_PACKAGE_XORG7=y"
-            echo "BR2_PACKAGE_XSERVER_XORG_SERVER=y"
-            echo "BR2_PACKAGE_FLUXBOX=y"
-            echo "BR2_PACKAGE_PCMANFM=y"
-            echo "BR2_PACKAGE_MIDORI=y" 
-            echo "BR2_PACKAGE_RSYNC=y"
-            echo "BR2_PACKAGE_PARTED=y"
-            echo "BR2_PACKAGE_E2FSPROGS=y"
-            echo "BR2_PACKAGE_UTIL_LINUX=y"
-            echo "BR2_PACKAGE_UTIL_LINUX_WIPEFS=y"
-          } >> .config
+          make qemu_x86_64_defconfig
+          
+          # Create a fragment to avoid "Legacy" and "Override" errors
+          cat <<EOF > brados.config
+          BR2_PACKAGE_PYTHON3=y
+          BR2_PACKAGE_PYTHON3_TKINTER=y
+          BR2_PACKAGE_XORG7=y
+          BR2_PACKAGE_XSERVER_XORG_SERVER=y
+          BR2_PACKAGE_FLUXBOX=y
+          BR2_PACKAGE_PCMANFM=y
+          BR2_PACKAGE_MIDORI=y
+          BR2_PACKAGE_RSYNC=y
+          BR2_PACKAGE_PARTED=y
+          BR2_PACKAGE_E2FSPROGS=y
+          BR2_PACKAGE_UTIL_LINUX=y
+          BR2_PACKAGE_UTIL_LINUX_WIPEFS=y
+          EOF
+
+          # Merge config and clean legacy markers
+          ./support/kconfig/merge_config.sh -m .config brados.config
           make olddefconfig
           make -j$(nproc)
 
@@ -75,13 +82,12 @@ jobs:
           ROOT=buildroot/output/target
           mkdir -p $ROOT/usr/bin $ROOT/root/Desktop $ROOT/usr/share/limine
           
-          # 1. Setup Installer & Bootloader
           cp installer-src/gui_installer.py $ROOT/usr/bin/
           chmod +x $ROOT/usr/bin/gui_installer.py
           cp limine/limine-bios.sys $ROOT/usr/share/limine/
           cp limine/limine $ROOT/usr/bin/
           
-          # 2. Create Live ISO Desktop Icon
+          # Desktop Icon for Live Media
           cat <<EOF > $ROOT/root/Desktop/Install.desktop
           [Desktop Entry]
           Name=Install BradOS
@@ -92,13 +98,11 @@ jobs:
           EOF
           chmod +x $ROOT/root/Desktop/Install.desktop
 
-          # 3. Configure LIVE Startup
-          # Note: The installer cleans this file up during the HDD install
+          # Live startup (Modified by installer during HDD install)
           echo "fluxbox &" > $ROOT/root/.xinitrc
           echo "pcmanfm --desktop &" >> $ROOT/root/.xinitrc
           echo "python3 /usr/bin/gui_installer.py" >> $ROOT/root/.xinitrc
           
-          # Auto-start X on login
           grep -q "startx" $ROOT/etc/profile || echo "startx" >> $ROOT/etc/profile
 
       - name: Generate ISO
@@ -119,7 +123,7 @@ jobs:
           EOF
           xorriso -as mkisofs -o BradOS-${{ env.VERSION }}.iso -b boot/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table iso/
 
-      - name: Upload & Release
+      - name: Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.VERSION }}
