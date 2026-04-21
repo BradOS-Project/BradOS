@@ -13,6 +13,7 @@ env:
   KERNEL_VERSION: 6.8.9
   INSTALLER_REPO: https://github.com/BradOS-Project/Installer.git
   BUILDROOT_VERSION: 2024.02
+  LIMINE_VERSION: 7.12.0
 
 jobs:
   build:
@@ -42,7 +43,12 @@ jobs:
         run: |
           set -e
           [ -d buildroot ] || git clone --depth 1 --branch ${{ env.BUILDROOT_VERSION }} https://github.com/buildroot/buildroot.git
-          [ -d limine ] || git clone --branch v7.x-binary --depth 1 https://github.com/limine-bootloader/limine.git
+          
+          # Download Limine binary release
+          wget -q https://github.com/limine-bootloader/limine/releases/download/v${{ env.LIMINE_VERSION }}/limine-${{ env.LIMINE_VERSION }}-binary.tar.xz
+          tar -xf limine-${{ env.LIMINE_VERSION }}-binary.tar.xz
+          mv limine-${{ env.LIMINE_VERSION }}-binary limine
+          
           git clone ${{ env.INSTALLER_REPO }} installer-src
           wget -q https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${{ env.KERNEL_VERSION }}.tar.xz
           tar -xf linux-${{ env.KERNEL_VERSION }}.tar.xz
