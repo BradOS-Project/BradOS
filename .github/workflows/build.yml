@@ -1,4 +1,4 @@
-name: BradOS Full Distro Build Pipeline
+name: BradOS Build Pipeline
 
 on:
   push:
@@ -17,17 +17,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build tools
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential bc bison flex libssl-dev libelf-dev \
-            git wget xorriso squashfs-tools mtools dosfstools rsync qemu-system-x86 python3
+      - name: System Deps
+        run: sudo apt update && sudo apt install -y build-essential bc bison flex libssl-dev libelf-dev git wget xorriso squashfs-tools mtools dosfstools rsync python3
 
-      - name: Generate version
-        run: echo "VERSION=$(date +'%Y.%m.%d')-${GITHUB_SHA::7}" >> $GITHUB_ENV
+      - name: Generate Version
+        run: echo "VERSION=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
 
       - name: Cache Buildroot
         uses: actions/cache@v4
@@ -35,29 +32,24 @@ jobs:
           path: |
             buildroot/dl
             buildroot/output
-          key: brados-v6-${{ github.ref_name }}
-          restore-keys: brados-v6-
+          key: brados-v8-${{ github.ref_name }}
 
-      - name: Clone Sources
+      - name: Fetch Sources
         run: |
           [ -d buildroot ] || git clone --depth 1 https://github.com/buildroot/buildroot.git
           [ -d limine ] || git clone --branch v7.x-binary --depth 1 https://github.com/limine-bootloader/limine.git
-          rm -rf installer-src && git clone ${{ env.INSTALLER_REPO }} installer-src
-          if [ ! -d "linux-${{ env.KERNEL_VERSION }}" ]; then
-            wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${{ env.KERNEL_VERSION }}.tar.xz
-            tar -xf linux-${{ env.KERNEL_VERSION }}.tar.xz
-          fi
+          git clone ${{ env.INSTALLER_REPO }} installer-src
+          wget -q https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${{ env.KERNEL_VERSION }}.tar.xz
+          tar -xf linux-${{ env.KERNEL_VERSION }}.tar.xz
 
       - name: Build Kernel
         run: |
           cd linux-${{ env.KERNEL_VERSION }}
-          if [ ! -f arch/x86/boot/bzImage ]; then
-            make x86_64_defconfig
-            make -j$(nproc) bzImage
-          fi
+          make x86_64_defconfig
+          make -j$(nproc) bzImage
           cp arch/x86/boot/bzImage ../bzImage
 
-      - name: Build Buildroot
+      - name: Build OS (Buildroot)
         run: |
           cd buildroot
           [ -f .config ] || make qemu_x86_64_defconfig
@@ -78,34 +70,38 @@ jobs:
           make olddefconfig
           make -j$(nproc)
 
-      - name: Assemble Filesystem
+      - name: Assemble Distro
         run: |
           ROOT=buildroot/output/target
           mkdir -p $ROOT/usr/bin $ROOT/root/Desktop $ROOT/usr/share/limine
-          cp installer-src/*.py $ROOT/usr/bin/
+          
+          # 1. Setup Installer & Bootloader
+          cp installer-src/gui_installer.py $ROOT/usr/bin/
           chmod +x $ROOT/usr/bin/gui_installer.py
           cp limine/limine-bios.sys $ROOT/usr/share/limine/
           cp limine/limine $ROOT/usr/bin/
           
-          cat <<EOF > $ROOT/root/Desktop/Installer.desktop
+          # 2. Create Live ISO Desktop Icon
+          cat <<EOF > $ROOT/root/Desktop/Install.desktop
           [Desktop Entry]
-          Type=Application
           Name=Install BradOS
           Exec=python3 /usr/bin/gui_installer.py
+          Type=Application
           Icon=system-software-install
           Terminal=false
           EOF
-          chmod +x $ROOT/root/Desktop/Installer.desktop
+          chmod +x $ROOT/root/Desktop/Install.desktop
 
+          # 3. Configure LIVE Startup
+          # Note: The installer cleans this file up during the HDD install
           echo "fluxbox &" > $ROOT/root/.xinitrc
           echo "pcmanfm --desktop &" >> $ROOT/root/.xinitrc
-          echo "midori &" >> $ROOT/root/.xinitrc
           echo "python3 /usr/bin/gui_installer.py" >> $ROOT/root/.xinitrc
           
+          # Auto-start X on login
           grep -q "startx" $ROOT/etc/profile || echo "startx" >> $ROOT/etc/profile
-          echo "NAME=\"BradOS\"" > $ROOT/etc/os-release
 
-      - name: Create ISO
+      - name: Generate ISO
         run: |
           mksquashfs buildroot/output/target rootfs.squashfs -comp xz -noappend
           mkdir -p iso/boot
@@ -115,17 +111,15 @@ jobs:
           cat <<EOF > iso/boot/limine.conf
           TIMEOUT=3
           GRAPHICS=yes
-          :BradOS
+          :BradOS (Live)
               PROTOCOL=linux
               KERNEL_PATH=/boot/bzImage
               MODULE_PATH=/rootfs.squashfs
               CMDLINE=root=/dev/ram0 rw
           EOF
-          xorriso -as mkisofs -o BradOS-${{ env.VERSION }}.iso \
-            -b boot/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table iso/
+          xorriso -as mkisofs -o BradOS-${{ env.VERSION }}.iso -b boot/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table iso/
 
-      - name: Create Release
-        if: github.ref == 'refs/heads/main'
+      - name: Upload & Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.VERSION }}
