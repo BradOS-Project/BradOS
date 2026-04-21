@@ -8,7 +8,7 @@ on:
 env:
   OS_NAME: BradOS
   KERNEL_VERSION: 6.8.9
-  INSTALLER_REPO: https://github.com/yourname/BradOS-installer.git
+  INSTALLER_REPO: https://github.com/BradOS-Project/Installer.git
 
 jobs:
   build:
