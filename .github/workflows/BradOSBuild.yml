@@ -77,28 +77,28 @@ jobs:
           make qemu_x86_64_defconfig
           mkdir -p configs
           printf '%s\n' \
-            'BR2_PACKAGE_PYTHON3=y' \
-            'BR2_PACKAGE_PYTHON3_TKINTER=y' \
-            'BR2_PACKAGE_XORG7=y' \
-            'BR2_PACKAGE_XSERVER_XORG_SERVER=y' \
-            'BR2_PACKAGE_FLUXBOX=y' \
-            'BR2_PACKAGE_PCMANFM=y' \
-            'BR2_PACKAGE_MIDORI=y' \
-            'BR2_PACKAGE_RSYNC=y' \
-            'BR2_PACKAGE_PARTED=y' \
-            'BR2_PACKAGE_E2FSPROGS=y' \
-            'BR2_PACKAGE_UTIL_LINUX=y' \
-            'BR2_PACKAGE_UTIL_LINUX_WIPEFS=y' \
-            'BR2_TARGET_ROOTFS_INITRAMFS=y' \
-            'BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y' \
-            'BR2_PACKAGE_UTIL_LINUX_MOUNT=y' \
-            'BR2_PACKAGE_E2FSPROGS_MKE2FS=y' \
-            'BR2_TARGET_GRUB2=y' \
-            'BR2_TARGET_GRUB2_I386_PC=y' \
-            'BR2_TARGET_GRUB2_INSTALL_TOOLS=y' \
-            > configs/brados_defconfig
+          'BR2_PACKAGE_PYTHON3=y' \
+          'BR2_PACKAGE_PYTHON3_TKINTER=y' \
+          'BR2_PACKAGE_XORG7=y' \
+          'BR2_PACKAGE_XSERVER_XORG_SERVER=y' \
+          'BR2_PACKAGE_FLUXBOX=y' \
+          'BR2_PACKAGE_PCMANFM=y' \
+          'BR2_PACKAGE_MIDORI=y' \
+          'BR2_PACKAGE_RSYNC=y' \
+          'BR2_PACKAGE_PARTED=y' \
+          'BR2_PACKAGE_E2FSPROGS=y' \
+          'BR2_PACKAGE_UTIL_LINUX=y' \
+          'BR2_PACKAGE_UTIL_LINUX_WIPEFS=y' \
+          'BR2_TARGET_ROOTFS_INITRAMFS=y' \
+          'BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y' \
+          'BR2_PACKAGE_UTIL_LINUX_MOUNT=y' \
+          'BR2_PACKAGE_E2FSPROGS_MKE2FS=y' \
+          'BR2_TARGET_GRUB2=y' \
+          'BR2_TARGET_GRUB2_I386_PC=y' \
+          'BR2_TARGET_GRUB2_INSTALL_TOOLS=y' \
+          > configs/brados_defconfig
           make BR2_DEFCONFIG=configs/brados_defconfig defconfig
-          make olddefconfig
+          make defconfig  # This validates and regenerates the config cleanly
 
       - name: Build Buildroot RootFS and Initramfs
         run: |
