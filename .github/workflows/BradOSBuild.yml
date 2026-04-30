@@ -36,12 +36,6 @@ jobs:
           # expose as a step output so it can be used in action inputs
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Cache Buildroot Downloads
-        uses: actions/cache@v4
-        with:
-          path: buildroot/dl
-          key: brados-dl-${{ env.BUILDROOT_VERSION }}
-
       - name: Fetch Sources
         run: |
           set -e
@@ -56,6 +50,29 @@ jobs:
           # Download Linux kernel
           wget -q https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${{ env.KERNEL_VERSION }}.tar.xz
           tar -xf linux-${{ env.KERNEL_VERSION }}.tar.xz
+
+      - name: Cache Buildroot Downloads
+        uses: actions/cache@v4
+        with:
+          path: buildroot/dl
+          key: brados-dl-${{ env.BUILDROOT_VERSION }}
+
+      - name: Cache Buildroot Compiler Output
+        uses: actions/cache@v4
+        with:
+          path: .buildroot-ccache
+          key: brados-buildroot-ccache-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('.github/workflows/BradOSBuild.yml') }}
+          restore-keys: |
+            brados-buildroot-ccache-${{ env.BUILDROOT_VERSION }}-
+            brados-buildroot-ccache-
+
+      - name: Cache Kernel Build
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.KERNEL_VERSION }}
+          key: brados-kernel-${{ env.KERNEL_VERSION }}-${{ hashFiles('.github/workflows/BradOSBuild.yml') }}
+          restore-keys: |
+            brados-kernel-${{ env.KERNEL_VERSION }}-
 
       - name: Build Kernel
         run: |
@@ -87,9 +104,13 @@ jobs:
           'BR2_PACKAGE_RSYNC=y' \
           'BR2_PACKAGE_PARTED=y' \
           'BR2_PACKAGE_E2FSPROGS=y' \
+          'BR2_CCACHE=y' \
+          'BR2_CCACHE_DIR="../.buildroot-ccache"' \
           'BR2_PACKAGE_UTIL_LINUX=y' \
           'BR2_PACKAGE_UTIL_LINUX_WIPEFS=y' \
-          'BR2_TARGET_ROOTFS_INITRAMFS=y' \
+          'BR2_TARGET_ROOTFS_CPIO=y' \
+          'BR2_TARGET_ROOTFS_CPIO_FULL=y' \
+          'BR2_TARGET_ROOTFS_CPIO_NONE=y' \
           'BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y' \
           'BR2_PACKAGE_UTIL_LINUX_MOUNT=y' \
           'BR2_PACKAGE_E2FSPROGS_MKE2FS=y' \
