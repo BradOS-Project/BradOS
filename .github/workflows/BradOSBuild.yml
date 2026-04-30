@@ -12,8 +12,8 @@ env:
   OS_NAME: BradOS
   KERNEL_VERSION: 6.8.9
   INSTALLER_REPO: https://github.com/BradOS-Project/Installer.git
-  BUILDROOT_VERSION: 2024.02.2   # Use exact point release tag
-  LIMINE_VERSION: 7.12.0
+  BUILDROOT_VERSION: 2025.02.13   # Use exact point release tag
+  LIMINE_VERSION: 12.0.2
 
 jobs:
   build:
@@ -28,8 +28,13 @@ jobs:
           sudo apt install -y build-essential bc bison flex libssl-dev libelf-dev \
             git wget xorriso squashfs-tools mtools dosfstools rsync python3 cpio
 
-      - name: Generate Version String
-        run: echo "VERSION=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
+      - id: generate_version
+        name: Generate Version String
+        run: |
+          VERSION=$(date +'%Y.%m.%d')
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          # expose as a step output so it can be used in action inputs
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Cache Buildroot Downloads
         uses: actions/cache@v4
@@ -75,24 +80,25 @@ jobs:
           set -e
           cd buildroot
           make qemu_x86_64_defconfig
-          cat <<EOF > configs/brados_defconfig
-          BR2_PACKAGE_PYTHON3=y
-          BR2_PACKAGE_PYTHON3_TKINTER=y
-          BR2_PACKAGE_XORG7=y
-          BR2_PACKAGE_XSERVER_XORG_SERVER=y
-          BR2_PACKAGE_FLUXBOX=y
-          BR2_PACKAGE_PCMANFM=y
-          BR2_PACKAGE_MIDORI=y
-          BR2_PACKAGE_RSYNC=y
-          BR2_PACKAGE_PARTED=y
-          BR2_PACKAGE_E2FSPROGS=y
-          BR2_PACKAGE_UTIL_LINUX=y
-          BR2_PACKAGE_UTIL_LINUX_WIPEFS=y
-          BR2_TARGET_ROOTFS_INITRAMFS=y
-          BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
-          BR2_PACKAGE_UTIL_LINUX_MOUNT=y
-          BR2_PACKAGE_E2FSPROGS_MKE2FS=y
-          EOF
+          mkdir -p configs
+          printf '%s\n' \
+            'BR2_PACKAGE_PYTHON3=y' \
+            'BR2_PACKAGE_PYTHON3_TKINTER=y' \
+            'BR2_PACKAGE_XORG7=y' \
+            'BR2_PACKAGE_XSERVER_XORG_SERVER=y' \
+            'BR2_PACKAGE_FLUXBOX=y' \
+            'BR2_PACKAGE_PCMANFM=y' \
+            'BR2_PACKAGE_MIDORI=y' \
+            'BR2_PACKAGE_RSYNC=y' \
+            'BR2_PACKAGE_PARTED=y' \
+            'BR2_PACKAGE_E2FSPROGS=y' \
+            'BR2_PACKAGE_UTIL_LINUX=y' \
+            'BR2_PACKAGE_UTIL_LINUX_WIPEFS=y' \
+            'BR2_TARGET_ROOTFS_INITRAMFS=y' \
+            'BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y' \
+            'BR2_PACKAGE_UTIL_LINUX_MOUNT=y' \
+            'BR2_PACKAGE_E2FSPROGS_MKE2FS=y' \
+            > configs/brados_defconfig
           make BR2_DEFCONFIG=configs/brados_defconfig defconfig
           make olddefconfig
 
@@ -117,17 +123,17 @@ jobs:
           chmod +x $ROOT/usr/bin/limine
 
           # Copy kernel into rootfs so it's available for installation
-          cp ../bzImage $ROOT/boot/
+          cp bzImage $ROOT/boot/
 
           # Live ISO Desktop Icon
-          cat <<EOF > $ROOT/root/Desktop/Install.desktop
-          [Desktop Entry]
-          Name=Install BradOS
-          Exec=python3 /usr/bin/gui_installer.py
-          Type=Application
-          Icon=system-software-install
-          Terminal=false
-          EOF
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Name=Install BradOS' \
+            'Exec=python3 /usr/bin/gui_installer.py' \
+            'Type=Application' \
+            'Icon=system-software-install' \
+            'Terminal=false' \
+            > $ROOT/root/Desktop/Install.desktop
           chmod +x $ROOT/root/Desktop/Install.desktop
 
           # Startup Configuration (Live)
@@ -151,18 +157,19 @@ jobs:
           cp buildroot/output/images/rootfs.cpio iso/boot/initramfs.cpio
           cp limine/limine-bios.sys limine/limine-bios-cd.bin iso/boot/
 
-          cat <<EOF > iso/boot/limine.conf
-          TIMEOUT=3
-          GRAPHICS=yes
-          :BradOS (Live)
-              PROTOCOL=linux
-              KERNEL_PATH=/boot/bzImage
-              MODULE_PATH=/boot/initramfs.cpio
-              MODULE_PATH=/rootfs.squashfs
-              CMDLINE=initrd=/boot/initramfs.cpio root=/dev/ram0 rw rootfstype=squashfs rootflags=loop
-          EOF
+          printf '%s\n' \
+            'TIMEOUT=3' \
+            'GRAPHICS=yes' \
+            ':BradOS (Live)' \
+            '    PROTOCOL=linux' \
+            '    KERNEL_PATH=/boot/bzImage' \
+            '    MODULE_PATH=/boot/initramfs.cpio' \
+            '    MODULE_PATH=/rootfs.squashfs' \
+            '    CMDLINE=initrd=/boot/initramfs.cpio root=/dev/ram0 rw rootfstype=squashfs rootflags=loop' \
+            > iso/boot/limine.conf
 
-          xorriso -as mkisofs -o BradOS-${{ env.VERSION }}.iso \
+          ISO_NAME="BradOS-${{ steps.generate_version.outputs.version }}.iso"
+          xorriso -as mkisofs -o "$ISO_NAME" \
             -b boot/limine-bios-cd.bin \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
             iso/
@@ -170,7 +177,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ env.VERSION }}
-          files: BradOS-${{ env.VERSION }}.iso
+          tag_name: ${{ steps.generate_version.outputs.version }}
+          files: BradOS-${{ steps.generate_version.outputs.version }}.iso
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
